@@ -535,11 +535,13 @@ class VLLMModel(Model):
                 tools=tools,
                 add_generation_prompt=True,
                 tokenize=False,
+                enable_thinking=False
             )
         else:
             prompt = self.tokenizer.apply_chat_template(
                 messages,
                 tokenize=False,
+                enable_thinking=False
             )
 
         sampling_params = SamplingParams(
@@ -649,6 +651,7 @@ class MLXModel(Model):
             messages,
             tools=tools,
             add_generation_prompt=True,
+            enable_thinking=False
         )
 
         self.last_input_token_count = len(prompt_ids)
@@ -829,6 +832,7 @@ class TransformersModel(Model):
             add_generation_prompt=True if tools_to_call_from else False,
             tokenize=True,
             return_dict=True,
+            enable_thinking=False
         )
         prompt_tensor = prompt_tensor.to(self.model.device)  # type: ignore
         if hasattr(prompt_tensor, "input_ids"):
