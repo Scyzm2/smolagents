@@ -529,19 +529,23 @@ class VLLMModel(Model):
         tools = completion_kwargs.pop("tools", None)
         completion_kwargs.pop("tool_choice", None)
 
+        enable_thinking = True
+        if 'DISABLE_THINKING' in os.environ:
+            enable_thinking = False
+
         if tools_to_call_from is not None:
             prompt = self.tokenizer.apply_chat_template(
                 messages,
                 tools=tools,
                 add_generation_prompt=True,
                 tokenize=False,
-                enable_thinking=False
+                enable_thinking=enable_thinking
             )
         else:
             prompt = self.tokenizer.apply_chat_template(
                 messages,
                 tokenize=False,
-                enable_thinking=False
+                enable_thinking=enable_thinking
             )
 
         sampling_params = SamplingParams(
@@ -647,11 +651,15 @@ class MLXModel(Model):
         tools = completion_kwargs.pop("tools", None)
         completion_kwargs.pop("tool_choice", None)
 
+        enable_thinking = True
+        if 'DISABLE_THINKING' in os.environ:
+            enable_thinking = False
+
         prompt_ids = self.tokenizer.apply_chat_template(
             messages,
             tools=tools,
             add_generation_prompt=True,
-            enable_thinking=False
+            enable_thinking=enable_thinking
         )
 
         self.last_input_token_count = len(prompt_ids)
@@ -825,6 +833,11 @@ class TransformersModel(Model):
             or self.kwargs.get("max_tokens")
             or 1024
         )
+
+        enable_thinking = True
+        if 'DISABLE_THINKING' in os.environ:
+            enable_thinking = False
+
         prompt_tensor = (self.processor if hasattr(self, "processor") else self.tokenizer).apply_chat_template(
             messages,  # type: ignore
             tools=[get_tool_json_schema(tool) for tool in tools_to_call_from] if tools_to_call_from else None,
@@ -832,7 +845,7 @@ class TransformersModel(Model):
             add_generation_prompt=True if tools_to_call_from else False,
             tokenize=True,
             return_dict=True,
-            enable_thinking=False
+            enable_thinking=enable_thinking
         )
         prompt_tensor = prompt_tensor.to(self.model.device)  # type: ignore
         if hasattr(prompt_tensor, "input_ids"):
