@@ -530,7 +530,7 @@ class VLLMModel(Model):
         completion_kwargs.pop("tool_choice", None)
 
         enable_thinking = True
-        if 'DISABLE_THINKING' in os.environ:
+        if os.environ.get('DISABLE_THINKING', '0') == '1':
             enable_thinking = False
 
         if tools_to_call_from is not None:
@@ -652,7 +652,7 @@ class MLXModel(Model):
         completion_kwargs.pop("tool_choice", None)
 
         enable_thinking = True
-        if 'DISABLE_THINKING' in os.environ:
+        if os.environ.get('DISABLE_THINKING', '0') == '1':
             enable_thinking = False
 
         prompt_ids = self.tokenizer.apply_chat_template(
@@ -835,7 +835,7 @@ class TransformersModel(Model):
         )
 
         enable_thinking = True
-        if 'DISABLE_THINKING' in os.environ:
+        if os.environ.get('DISABLE_THINKING', '0') == '1':
             enable_thinking = False
 
         prompt_tensor = (self.processor if hasattr(self, "processor") else self.tokenizer).apply_chat_template(
