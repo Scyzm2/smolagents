@@ -1200,6 +1200,15 @@ class TestCodeAgent:
         answer = agent.run("Fake task.")
         assert answer == "2CUSTOM"
 
+    def test_local_python_executor_with_custom_functions(self):
+        model = MagicMock()
+        model.last_input_token_count = 10
+        model.last_output_token_count = 5
+        agent = CodeAgent(tools=[], model=model)
+        agent.python_executor.additional_functions = {"open": open}
+        agent.run("Test run")
+        assert "open" in agent.python_executor.static_tools
+
     @pytest.mark.parametrize("agent_dict_version", ["v1.9", "v1.10"])
     def test_from_folder(self, agent_dict_version, get_agent_dict):
         agent_dict = get_agent_dict(agent_dict_version)
