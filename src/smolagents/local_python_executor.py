@@ -456,24 +456,43 @@ def evaluate_class_def(
     for stmt in class_def.body:
         if isinstance(stmt, ast.FunctionDef):
             class_dict[stmt.name] = evaluate_ast(stmt, state, static_tools, custom_tools, authorized_imports)
+        elif isinstance(stmt, ast.AnnAssign):
+            if stmt.value:
+                value = evaluate_ast(stmt.value, state, static_tools, custom_tools, authorized_imports)
+            target = stmt.target
+            # Handle target types for annotation
+            if isinstance(target, ast.Name):
+                # Simple variable annotation like "x: int"
+                annotation = evaluate_ast(stmt.annotation, state, static_tools, custom_tools, authorized_imports)
+                class_dict.setdefault("__annotations__", {})[target.id] = annotation
+                # Assign value if provided
+                if stmt.value:
+                    class_dict[target.id] = value
+            elif isinstance(target, ast.Attribute):
+                # Attribute annotation like "obj.attr: int"
+                obj = evaluate_ast(target.value, class_dict, static_tools, custom_tools, authorized_imports)
+                # If there's a value assignment, set the attribute
+                if stmt.value:
+                    setattr(obj, target.attr, value)
+            elif isinstance(target, ast.Subscript):
+                # Subscript annotation like "dict[key]: int"
+                container = evaluate_ast(target.value, class_dict, static_tools, custom_tools, authorized_imports)
+                index = evaluate_ast(target.slice, state, static_tools, custom_tools, authorized_imports)
+                # If there's a value assignment, set the item
+                if stmt.value:
+                    container[index] = value
+            else:
+                raise InterpreterError(f"Unsupported AnnAssign target in class body: {type(target).__name__}")
         elif isinstance(stmt, ast.Assign):
+            value = evaluate_ast(stmt.value, state, static_tools, custom_tools, authorized_imports)
             for target in stmt.targets:
                 if isinstance(target, ast.Name):
-                    class_dict[target.id] = evaluate_ast(
-                        stmt.value,
-                        state,
-                        static_tools,
-                        custom_tools,
-                        authorized_imports,
-                    )
+                    class_dict[target.id] = value
                 elif isinstance(target, ast.Attribute):
-                    class_dict[target.attr] = evaluate_ast(
-                        stmt.value,
-                        state,
-                        static_tools,
-                        custom_tools,
-                        authorized_imports,
-                    )
+                    obj = evaluate_ast(target.value, class_dict, static_tools, custom_tools, authorized_imports)
+                    setattr(obj, target.attr, value)
+        elif isinstance(stmt, ast.Pass):
+            pass
         elif (
             isinstance(stmt, ast.Expr)
             and stmt == class_def.body[0]

@@ -172,6 +172,15 @@ def parse_json_blob(json_blob: str) -> tuple[dict[str, str], str]:
         )
 
 
+def extract_code_from_text(text: str) -> str | None:
+    """Extract code from the LLM's output."""
+    pattern = r"```(?:py|python)?\s*\n(.*?)\n```"
+    matches = re.findall(pattern, text, re.DOTALL)
+    if matches:
+        return "\n\n".join(match.strip() for match in matches)
+    return None
+
+
 def parse_code_blobs(text: str) -> str:
     """Extract code blocs from the LLM's output.
 
@@ -186,10 +195,9 @@ def parse_code_blobs(text: str) -> str:
     Raises:
         ValueError: If no valid code block is found in the text.
     """
-    pattern = r"```(?:py|python)?\s*\n(.*?)\n```"
-    matches = re.findall(pattern, text, re.DOTALL)
+    matches = extract_code_from_text(text)
     if matches:
-        return "\n\n".join(match.strip() for match in matches)
+        return matches
     # Maybe the LLM outputted a code blob directly
     try:
         ast.parse(text)
@@ -201,7 +209,7 @@ def parse_code_blobs(text: str) -> str:
         raise ValueError(
             dedent(
                 f"""
-                Your code snippet is invalid, because the regex pattern {pattern} was not found in it.
+                Your code snippet is invalid, because the regex pattern ```(?:py|python)?\\s*\\n(.*?)\\n``` was not found in it.
                 Here is your code snippet:
                 {text}
                 It seems like you're trying to return the final answer, you can do it as follows:
@@ -215,7 +223,7 @@ def parse_code_blobs(text: str) -> str:
     raise ValueError(
         dedent(
             f"""
-            Your code snippet is invalid, because the regex pattern {pattern} was not found in it.
+            Your code snippet is invalid, because the regex pattern ```(?:py|python)?\\s*\\n(.*?)\\n``` was not found in it.
             Here is your code snippet:
             {text}
             Make sure to include code with the correct pattern, for instance:
