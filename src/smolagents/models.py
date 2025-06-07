@@ -85,6 +85,9 @@ class ChatMessageToolCall:
     id: str
     type: str
 
+    def __str__(self) -> str:
+        return f"Call: {self.id}: Calling {str(self.function.name)} with arguments: {str(self.function.arguments)}"
+
 
 @dataclass
 class ChatMessage:
@@ -134,6 +137,16 @@ class ChatMessageStreamDelta:
     content: str | None = None
     tool_calls: list[ChatMessageToolCall] | None = None
     token_usage: TokenUsage | None = None
+
+
+@dataclass
+class ToolCallStreamDelta:
+    """Represents a streaming delta for tool calls during generation."""
+
+    index: int | None = None
+    id: str | None = None
+    type: str | None = None
+    function: dict[str, Any] | None = None
 
 
 class MessageRole(str, Enum):
@@ -323,6 +336,7 @@ class Model:
         tools_to_call_from: list[Tool] | None = None,
         custom_role_conversions: dict[str, str] | None = None,
         convert_images_to_image_urls: bool = False,
+        tool_choice: str | dict | None = "required",  # Configurable tool_choice parameter
         **kwargs,
     ) -> dict[str, Any]:
         """
@@ -357,12 +371,12 @@ class Model:
 
         # Handle tools parameter
         if tools_to_call_from:
-            completion_kwargs.update(
-                {
-                    "tools": [get_tool_json_schema(tool) for tool in tools_to_call_from],
-                    "tool_choice": "required",
-                }
-            )
+            tools_config = {
+                "tools": [get_tool_json_schema(tool) for tool in tools_to_call_from],
+            }
+            if tool_choice is not None:
+                tools_config["tool_choice"] = tool_choice
+            completion_kwargs.update(tools_config)
 
         # Finally, use the passed-in kwargs to override all settings
         completion_kwargs.update(kwargs)
@@ -581,8 +595,12 @@ class MLXModel(Model):
             The key, which can usually be found in the model's chat template, for retrieving a tool name.
         tool_arguments_key (str):
             The key, which can usually be found in the model's chat template, for retrieving tool arguments.
-        trust_remote_code (bool):
+        trust_remote_code (bool, default `False`):
             Some models on the Hub require running remote code: for this model, you would have to set this flag to True.
+        load_kwargs (dict[str, Any], *optional*):
+            Additional keyword arguments to pass to the `mlx.lm.load` method when loading the model and tokenizer.
+        apply_chat_template_kwargs (dict, *optional*):
+            Additional keyword arguments to pass to the `apply_chat_template` method of the tokenizer.
         kwargs (dict, *optional*):
             Any additional keyword arguments that you want to use in model.generate(), for instance `max_tokens`.
 
@@ -609,25 +627,26 @@ class MLXModel(Model):
     def __init__(
         self,
         model_id: str,
-        tool_name_key: str = "name",
-        tool_arguments_key: str = "arguments",
         trust_remote_code: bool = False,
+        load_kwargs: dict[str, Any] | None = None,
+        apply_chat_template_kwargs: dict[str, Any] | None = None,
         **kwargs,
     ):
-        super().__init__(
-            flatten_messages_as_text=True, model_id=model_id, **kwargs
-        )  # mlx-lm doesn't support vision models
         if not _is_package_available("mlx_lm"):
             raise ModuleNotFoundError(
                 "Please install 'mlx-lm' extra to use 'MLXModel': `pip install 'smolagents[mlx-lm]'`"
             )
-        import mlx_lm  # type: ignore
+        import mlx_lm
 
-        self.model_id = model_id
-        self.model, self.tokenizer = mlx_lm.load(model_id, tokenizer_config={"trust_remote_code": trust_remote_code})
+        self.load_kwargs = load_kwargs or {}
+        self.load_kwargs.setdefault("tokenizer_config", {}).setdefault("trust_remote_code", trust_remote_code)
+        self.apply_chat_template_kwargs = apply_chat_template_kwargs or {}
+        self.apply_chat_template_kwargs.setdefault("add_generation_prompt", True)
+        # mlx-lm doesn't support vision models: flatten_messages_as_text=True
+        super().__init__(model_id=model_id, flatten_messages_as_text=True, **kwargs)
+
+        self.model, self.tokenizer = mlx_lm.load(self.model_id, **self.load_kwargs)
         self.stream_generate = mlx_lm.stream_generate
-        self.tool_name_key = tool_name_key
-        self.tool_arguments_key = tool_arguments_key
         self.is_vlm = False  # mlx-lm doesn't support vision models
 
     def generate(
@@ -658,8 +677,8 @@ class MLXModel(Model):
         prompt_ids = self.tokenizer.apply_chat_template(
             messages,
             tools=tools,
-            add_generation_prompt=True,
-            enable_thinking=enable_thinking
+            enable_thinking=enable_thinking,
+            **self.apply_chat_template_kwargs
         )
 
         output_tokens = 0
@@ -1235,7 +1254,7 @@ class InferenceClientModel(ApiModel):
             Token to use for authentication. This is a duplicated argument from `token` to make [`InferenceClientModel`]
             follow the same pattern as `openai.OpenAI` client. Cannot be used if `token` is set. Defaults to None.
         bill_to (`str`, *optional*):
-            The billing account to use for the requests. By default the requests are billed on the user’s account. Requests can only be billed to
+            The billing account to use for the requests. By default the requests are billed on the user's account. Requests can only be billed to
             an organization the user is a member of, and which has subscribed to Enterprise Hub.
         base_url (`str`, `optional`):
             Base URL to run inference. This is a duplicated argument from `model` to make [`InferenceClientModel`]
@@ -1318,7 +1337,7 @@ class InferenceClientModel(ApiModel):
             messages=messages,
             stop_sequences=stop_sequences,
             tools_to_call_from=tools_to_call_from,
-            response_format=response_format,
+            # response_format=response_format,
             convert_images_to_image_urls=True,
             custom_role_conversions=self.custom_role_conversions,
             **kwargs,
@@ -1344,13 +1363,6 @@ class InferenceClientModel(ApiModel):
         tools_to_call_from: list[Tool] | None = None,
         **kwargs,
     ) -> Generator[ChatMessageStreamDelta]:
-        if tools_to_call_from:
-            raise NotImplementedError("Streaming is not yet supported for tool calling")
-        if response_format is not None and self.client_kwargs["provider"] not in STRUCTURED_GENERATION_PROVIDERS:
-            raise ValueError(
-                "InferenceClientModel only supports structured outputs with these providers:"
-                + ", ".join(STRUCTURED_GENERATION_PROVIDERS)
-            )
         completion_kwargs = self._prepare_completion_kwargs(
             messages=messages,
             stop_sequences=stop_sequences,
@@ -1361,18 +1373,67 @@ class InferenceClientModel(ApiModel):
             convert_images_to_image_urls=True,
             **kwargs,
         )
+
+        # Track accumulated tool calls and content
+        accumulated_tool_calls = {}
+        current_content = ""
+
         for event in self.client.chat.completions.create(
             **completion_kwargs, stream=True, stream_options={"include_usage": True}
         ):
             if event.choices:
-                if event.choices[0].delta is None:
-                    if not getattr(event.choices[0], "finish_reason", None):
+                choice = event.choices[0]
+                if choice.delta is None:
+                    if not getattr(choice, "finish_reason", None):
                         raise ValueError(f"No content or tool calls in event: {event}")
                 else:
-                    yield ChatMessageStreamDelta(
-                        content=event.choices[0].delta.content,
-                    )
-            if getattr(event, "usage", None):
+                    delta = choice.delta
+
+                    # Handle content streaming
+                    if delta.content:
+                        current_content += delta.content
+                        yield ChatMessageStreamDelta(content=delta.content)
+
+                    # Handle tool call streaming
+                    if delta.tool_calls:
+                        for tool_call_delta in delta.tool_calls:  # ?ormally there should be only one call at a time
+                            # Extend accumulated_tool_calls list to accommodate the new tool call if needed
+                            while len(accumulated_tool_calls) <= tool_call_delta.index:
+                                accumulated_tool_calls[tool_call_delta.index] = {
+                                    "id": None,
+                                    "type": None,
+                                    "function": {"name": None, "arguments": ""},
+                                }
+
+                            # Update the tool call at the specific index
+                            tool_call = accumulated_tool_calls[tool_call_delta.index]
+
+                            if tool_call_delta.id:
+                                tool_call["id"] = tool_call_delta.index
+                            if tool_call_delta.type:
+                                tool_call["type"] = tool_call_delta.type
+                            if tool_call_delta.function:
+                                if tool_call_delta.function.name:
+                                    tool_call["function"]["name"] = tool_call_delta.function.name
+                                if tool_call_delta.function.arguments:
+                                    tool_call["function"]["arguments"] += tool_call_delta.function.arguments
+
+                        yield ChatMessageStreamDelta(
+                            content=current_content,
+                            tool_calls=[
+                                ToolCallStreamDelta(
+                                    id=tool_call["id"],
+                                    type=tool_call["type"],
+                                    function=ChatMessageToolCallDefinition(
+                                        name=tool_call["function"]["name"],
+                                        arguments=tool_call["function"]["arguments"],
+                                    ),
+                                )
+                                for tool_call in accumulated_tool_calls.values()
+                            ],
+                        )
+
+            if event.usage:
                 self._last_input_token_count = event.usage.prompt_tokens
                 self._last_output_token_count = event.usage.completion_tokens
                 yield ChatMessageStreamDelta(
@@ -1462,8 +1523,6 @@ class OpenAIServerModel(ApiModel):
         tools_to_call_from: list[Tool] | None = None,
         **kwargs,
     ) -> Generator[ChatMessageStreamDelta]:
-        if tools_to_call_from:
-            raise NotImplementedError("Streaming is not yet supported for tool calling")
         completion_kwargs = self._prepare_completion_kwargs(
             messages=messages,
             stop_sequences=stop_sequences,
@@ -1474,15 +1533,66 @@ class OpenAIServerModel(ApiModel):
             convert_images_to_image_urls=True,
             **kwargs,
         )
+
+        # Track accumulated tool calls and content
+        accumulated_tool_calls = {}
+        current_content = ""
+
         for event in self.client.chat.completions.create(
             **completion_kwargs, stream=True, stream_options={"include_usage": True}
         ):
             if event.choices:
-                if event.choices[0].delta is None:
-                    if not getattr(event.choices[0], "finish_reason", None):
+                choice = event.choices[0]
+                if choice.delta is None:
+                    if not getattr(choice, "finish_reason", None):
                         raise ValueError(f"No content or tool calls in event: {event}")
                 else:
-                    yield ChatMessageStreamDelta(content=event.choices[0].delta.content)
+                    delta = choice.delta
+
+                    # Handle content streaming
+                    if delta.content:
+                        current_content += delta.content
+                        yield ChatMessageStreamDelta(content=delta.content)
+
+                    # Handle tool call streaming
+                    if delta.tool_calls:
+                        for tool_call_delta in delta.tool_calls:  # ?ormally there should be only one call at a time
+                            # Extend accumulated_tool_calls list to accommodate the new tool call if needed
+                            while len(accumulated_tool_calls) <= tool_call_delta.index:
+                                accumulated_tool_calls[tool_call_delta.index] = {
+                                    "id": None,
+                                    "type": None,
+                                    "function": {"name": None, "arguments": ""},
+                                }
+
+                            # Update the tool call at the specific index
+                            tool_call = accumulated_tool_calls[tool_call_delta.index]
+
+                            if tool_call_delta.id:
+                                tool_call["id"] = tool_call_delta.index
+                            if tool_call_delta.type:
+                                tool_call["type"] = tool_call_delta.type
+                            if tool_call_delta.function:
+                                if tool_call_delta.function.name:
+                                    tool_call["function"]["name"] = tool_call_delta.function.name
+                                if tool_call_delta.function.arguments:
+                                    tool_call["function"]["arguments"] += tool_call_delta.function.arguments
+
+                        yield ChatMessageStreamDelta(
+                            content=current_content,
+                            tool_calls=[
+                                ToolCallStreamDelta(
+                                    id=tool_call["id"],
+                                    type=tool_call["type"],
+                                    function=ChatMessageToolCallDefinition(
+                                        name=tool_call["function"]["name"],
+                                        arguments=tool_call["function"]["arguments"],
+                                    ),
+                                )
+                                for tool_call in accumulated_tool_calls.values()
+                            ],
+                        )
+
             if event.usage:
                 self._last_input_token_count = event.usage.prompt_tokens
                 self._last_output_token_count = event.usage.completion_tokens
